@@ -154,11 +154,10 @@ const RESTAURANT_INFO = {
   phone: "7903262362",
 };
 
-// Paste your Razorpay Key ID here (the public "Key ID", starts with rzp_ —
-// never your Key Secret, that must stay on a server). Get it from
-// Razorpay Dashboard > Settings > API Keys. Until this is set, online
-// payment falls back to a clearly-labelled demo mode.
-const RAZORPAY_KEY_ID = "rzp_test_TE8TZtiN5Pi4xl";
+// The Razorpay Key ID now comes from the server (/api/create-order), which
+// reads the live RAZORPAY_KEY_ID from Vercel's environment variables. This
+// flag just controls whether the "Pay online" option is shown at all.
+const RAZORPAY_ENABLED = true;
 
 function loadRazorpayScript() {
   return new Promise((resolve) => {
@@ -260,15 +259,39 @@ export default function ChaskaApp() {
   const handleRazorpayPayment = async () => {
     setPayLoading(true);
     const loaded = await loadRazorpayScript();
-    setPayLoading(false);
     if (!loaded) {
+      setPayLoading(false);
       alert("Couldn't load payment gateway. Check your connection and try again.");
       return;
     }
+
+    // Ask our own backend to create the order (this is where the live
+    // RAZORPAY_KEY_ID and KEY_SECRET actually live, safely on the server).
+    let order;
+    try {
+      const res = await fetch("/api/create-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: total,
+          items: cart,
+          customer: { name: form.name, phone: form.phone },
+        }),
+      });
+      order = await res.json();
+      if (!res.ok) throw new Error(order.error || "Order creation failed");
+    } catch (err) {
+      setPayLoading(false);
+      alert("Couldn't start payment. Please try again in a moment.");
+      return;
+    }
+    setPayLoading(false);
+
     const rzp = new window.Razorpay({
-      key: RAZORPAY_KEY_ID,
-      amount: Math.round(total * 100), // paise
-      currency: "INR",
+      key: order.keyId,
+      order_id: order.orderId,
+      amount: order.amount,
+      currency: order.currency,
       name: RESTAURANT_INFO.name,
       description: `Order for ${form.name}`,
       prefill: { name: form.name, contact: form.phone },
@@ -591,20 +614,15 @@ export default function ChaskaApp() {
             {checkoutStep === "payment" && (
               <div className="flex-1 p-4 flex flex-col">
                 <div className="bg-[#17130D] border border-[#D9A441]/15 rounded-lg p-4 mb-4">
-                  {!RAZORPAY_KEY_ID && (
-                    <p className="text-xs text-[#F3E9D2]/50 mb-3">
-                      Demo mode — no payment key configured yet. Add your Razorpay Key ID in the code to accept real payments here.
-                    </p>
-                  )}
                   <div className="text-sm text-[#F3E9D2]/70 mb-1">Amount payable</div>
                   <div className="font-display text-3xl text-[#D9A441]">{money(total)}</div>
                 </div>
                 <button
-                  onClick={RAZORPAY_KEY_ID ? handleRazorpayPayment : placeOrder}
+                  onClick={RAZORPAY_ENABLED ? handleRazorpayPayment : placeOrder}
                   disabled={payLoading}
                   className="w-full bg-[#D9A441] text-[#100D08] font-semibold py-3 rounded-lg hover:bg-[#E8C878] transition-colors disabled:opacity-50"
                 >
-                  {payLoading ? "Opening payment..." : RAZORPAY_KEY_ID ? "Pay Now (UPI / Card)" : "Simulate Successful Payment"}
+                  {payLoading ? "Opening payment..." : "Pay Now (UPI / Card)"}
                 </button>
                 <button
                   onClick={() => setCheckoutStep("form")}
